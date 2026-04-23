@@ -1,9 +1,21 @@
 /// <reference types="vite/client" />
 import { GoogleGenAI } from "@google/genai";
 
-const ai = new GoogleGenAI({ 
-  apiKey: import.meta.env.VITE_GEMINI_API_KEY || (typeof process !== 'undefined' ? process.env.GEMINI_API_KEY : '') || '' 
-});
+let aiInstance: GoogleGenAI | null = null;
+function getAI() {
+  if (!aiInstance) {
+    const key = import.meta.env.VITE_GEMINI_API_KEY || (typeof process !== 'undefined' ? process.env.GEMINI_API_KEY : '') || '';
+    if (!key) {
+      console.warn("VITE_GEMINI_API_KEY is missing. Gemini features will not work.");
+      // Return a mock object if we really don't want to crash, but throwing works if we catch it downstream.
+      // Easiest is to just instantiate it, but GoogleGenAI throws if key is empty.
+      // So we must handle the empty case.
+    }
+    // We instantiate it, but if key is empty and it throws, we catch it locally or let it throw when called.
+    aiInstance = new GoogleGenAI({ apiKey: key || 'MISSING_KEY' }); // Pass a dummy key so it doesn't crash on init
+  }
+  return aiInstance;
+}
 
 export interface PacingStats {
   completedCount: number;
@@ -55,7 +67,7 @@ export async function simulateExecution(code: string, language: string): Promise
   `;
 
   try {
-    const response = await ai.models.generateContent({
+    const response = await getAI().models.generateContent({
       model: "gemini-3-flash-preview",
       contents: prompt,
       generationConfig: {
@@ -124,7 +136,7 @@ export async function generateRecoveryPlan(stats: PacingStats, customQuery?: str
   const prompt = basePrompt + "\n" + instructionPrompt + "\n" + formatPrompt;
 
   try {
-    const response = await ai.models.generateContent({
+    const response = await getAI().models.generateContent({
       model: "gemini-3-flash-preview",
       contents: prompt,
     });
