@@ -10,6 +10,7 @@ Nexus Algorithm is a high-performance, ethereal-themed engineering platform desi
 - **AI Recovery Plans**: Integrated with **Google Gemini AI** to analyze your progress and generate "Stress-Free Recovery" plans if you fall behind.
 - **Real-Time Streak Tracking**: Motivation driven by real-time activity logs. Calculate your streak based on consecutive days of problem solving.
 - **Comprehensive Problem Set**: Curated list of problems spanning Arrays, Strings, Trees, Graphs, and more.
+- **Live Compiler Subsystem**: Integrated with the **Piston API** to support real-time code execution for **C, C++, Python, and Java**. Test your logic instantly within the platform.
 - **Glassmorphism UI**: A dark, high-contrast interface designed for long coding sessions.
 - **Full-Stack Persistence**: Powered by **Firebase** for secure authentication and real-time data sync across devices.
 - **Pomodoro Focus Timer**: Integrated focus tool to manage deep work blocks.
@@ -21,6 +22,7 @@ Nexus Algorithm is a high-performance, ethereal-themed engineering platform desi
 - **Database**: Firebase Firestore (NoSQL)
 - **Authentication**: Firebase Google Auth
 - **AI Engine**: Google Gemini Pro (via @google/genai)
+- **Compilation Engine**: Piston API (Multi-language execution)
 - **Visuals**: Recharts (Analytics), Lucide React (Icons)
 - **Deployment**: Optimized for Vercel
 
@@ -51,7 +53,8 @@ The AI coach doesn't just give hints; it analyzes your "backlog" (the gap betwee
    ```
 
 3. **Firebase Setup**:
-   - Ensure your `firebase-applet-config.json` is configured with your project credentials.
+   - Add your Firebase credentials to your `.env` file (see `.env.example`).
+   - If deploying to **Vercel**, make sure to add these variables in the **Vercel Project Settings**.
    - Authorized domains in Firebase Console: `localhost` and your production URL.
 
 4. **Run**:

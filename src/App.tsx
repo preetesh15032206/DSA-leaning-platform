@@ -1,4 +1,13 @@
 import React, { useState, useEffect } from 'react';
+import Editor from 'react-simple-code-editor';
+// @ts-ignore
+import { highlight, languages } from 'prismjs';
+import 'prismjs/components/prism-clike';
+import 'prismjs/components/prism-python';
+import 'prismjs/components/prism-c';
+import 'prismjs/components/prism-cpp';
+import 'prismjs/components/prism-java';
+import 'prismjs/themes/prism-tomorrow.css';
 import { 
   BarChart, 
   Bar, 
@@ -42,14 +51,20 @@ import {
   ChevronRight,
   Plus,
   LogOut,
-  LogIn
+  LogIn,
+  Calendar,
+  PieChart,
+  ArrowDownRight,
+  ArrowUpRight,
+  Sparkles,
+  Brain
 } from 'lucide-react';
 import { motion, AnimatePresence } from 'motion/react';
 import { TOPICS, USER_STATS, PROBLEMS, Topic, Problem } from './constants';
 import { cn } from './lib/utils';
 import { auth, signInWithGoogle, logout, db, handleFirestoreError } from './lib/firebase';
 import { onAuthStateChanged, User } from 'firebase/auth';
-import { generateRecoveryPlan } from './services/geminiService';
+import { generateRecoveryPlan, simulateExecution } from './services/geminiService';
 import { 
   collection, 
   query, 
@@ -63,7 +78,17 @@ import {
 
 // --- Components ---
 
-const Sidebar = ({ activeTab, setActiveTab }: { activeTab: string, setActiveTab: (t: string) => void }) => {
+const Sidebar = ({ 
+  activeTab, 
+  setActiveTab,
+  solvedToday,
+  dailyGoal
+}: { 
+  activeTab: string, 
+  setActiveTab: (t: string) => void,
+  solvedToday: number,
+  dailyGoal: number
+}) => {
   const navItems = [
     { id: 'dashboard', icon: LayoutDashboard, label: 'Dashboard' },
     { id: 'topics', icon: Layers, label: 'Topics' },
@@ -73,11 +98,13 @@ const Sidebar = ({ activeTab, setActiveTab }: { activeTab: string, setActiveTab:
     { id: 'analytics', icon: BarChart3, label: 'Analytics' },
   ];
 
+  const progressToday = dailyGoal > 0 ? Math.min(100, (solvedToday / dailyGoal) * 100) : 100;
+
   return (
     <aside className="fixed left-0 top-0 h-full w-64 bg-surface-container flex flex-col py-8 border-r border-white/5 z-50">
       <div className="px-8 mb-12 flex items-center gap-3">
         <div className="w-8 h-8 bg-gradient-to-br from-primary to-secondary rounded-lg shadow-lg shadow-primary/20" />
-        <span className="text-xl font-bold tracking-tight text-on-surface">KINETIC</span>
+        <span className="text-xl font-bold tracking-tight text-on-surface uppercase">Nexus</span>
       </div>
       
       <div className="flex-1 space-y-1 px-4">
@@ -105,12 +132,30 @@ const Sidebar = ({ activeTab, setActiveTab }: { activeTab: string, setActiveTab:
       </div>
 
       <div className="mt-auto px-6">
-        <div className="bg-surface-container-high/40 p-4 rounded-2xl border border-white/5">
-          <p className="text-[10px] uppercase tracking-widest text-slate-500 font-bold mb-2">Daily Goal</p>
-          <div className="h-1.5 w-full bg-surface-container rounded-full overflow-hidden">
-            <div className="h-full bg-primary w-2/3 shadow-[0_0_8px_#3B82F6]" />
+        <div className={cn(
+          "p-4 rounded-2xl border transition-all duration-500",
+          solvedToday >= dailyGoal && dailyGoal > 0 
+            ? "bg-primary/10 border-primary/20 shadow-lg shadow-primary/5" 
+            : "bg-surface-container-high/40 border-white/5"
+        )}>
+          <div className="flex justify-between items-center mb-2">
+            <p className="text-[10px] uppercase tracking-widest text-slate-500 font-bold">Daily Goal</p>
+            {solvedToday >= dailyGoal && dailyGoal > 0 && (
+              <span className="text-[8px] font-black bg-primary text-white px-2 py-0.5 rounded-full animate-bounce">ACHIEVED</span>
+            )}
           </div>
-          <p className="text-xs text-on-surface-variant mt-2">2/3 Solved</p>
+          <div className="h-1.5 w-full bg-surface-container rounded-full overflow-hidden">
+            <div 
+              className={cn(
+                "h-full transition-all duration-700 shadow-[0_0_8px_#3B82F6]",
+                solvedToday >= dailyGoal && dailyGoal > 0 ? "bg-green-400" : "bg-primary"
+              )}
+              style={{ width: `${progressToday}%` }} 
+            />
+          </div>
+          <p className="text-xs text-on-surface-variant mt-2 font-bold tracking-tight">
+            {solvedToday}/{dailyGoal} <span className="opacity-50">{solvedToday >= dailyGoal ? 'Goal Met!' : 'Problems'}</span>
+          </p>
         </div>
       </div>
     </aside>
@@ -504,7 +549,7 @@ const Analytics = ({
   onUpdateSchedule
 }: { 
   completedCount: number, 
-  completedProblems: Record<string, boolean>,
+  completedProblems: Record<string, { completed: boolean, updatedAt?: Timestamp }>,
   schedule: { startDate: string, endDate: string },
   onUpdateSchedule: (start: string, end: string) => void
 }) => {
@@ -514,6 +559,7 @@ const Analytics = ({
   });
   const [aiInsights, setAiInsights] = useState<string>("");
   const [isAiLoading, setIsAiLoading] = useState(false);
+  const [userQuery, setUserQuery] = useState("");
 
   useEffect(() => {
     setTempDates({
@@ -529,258 +575,370 @@ const Analytics = ({
   const isInvalidRange = start > end;
   
   const totalDays = isInvalidRange ? 1 : Math.max(1, Math.ceil((end.getTime() - start.getTime()) / (1000 * 60 * 60 * 24)));
-  const daysPassed = Math.max(0, Math.ceil((today.getTime() - start.getTime()) / (1000 * 60 * 60 * 24)));
+  const daysPassed = Math.max(1, Math.ceil((today.getTime() - start.getTime()) / (1000 * 60 * 60 * 24)));
   const daysRemaining = Math.max(0, Math.ceil((end.getTime() - today.getTime()) / (1000 * 60 * 60 * 24)));
   
-  const totalProblems = PROBLEMS.length;
-  const problemsRemaining = totalProblems - completedCount;
+  const totalProblemsCount = PROBLEMS.length;
+  const problemsRemaining = totalProblemsCount - completedCount;
   
-  const originalRate = totalProblems / totalDays;
+  const originalRate = totalProblemsCount / totalDays;
   const requiredRate = isInvalidRange ? 0 : (daysRemaining > 0 ? problemsRemaining / daysRemaining : problemsRemaining);
   
-  const expectedSolved = isInvalidRange ? 0 : Math.min(totalProblems, Math.floor(originalRate * daysPassed));
-  const backlog = Math.max(0, expectedSolved - completedCount);
+  const expectedSolved = isInvalidRange ? 0 : Math.min(totalProblemsCount, Math.floor(originalRate * daysPassed));
+  const backlog = expectedSolved - completedCount;
   const isBehind = backlog > 0;
+  const isAhead = backlog < 0;
 
-  const chartData = [
-    { name: 'Target', value: expectedSolved },
-    { name: 'Actual', value: completedCount },
-    { name: 'Remaining', value: problemsRemaining },
-  ];
+  // Forecast Feature
+  const currentVelocity = completedCount / daysPassed;
+  const estDaysLeft = currentVelocity > 0 ? Math.ceil(problemsRemaining / currentVelocity) : Infinity;
+  const estEndDate = new Date(today);
+  if (estDaysLeft !== Infinity) estEndDate.setDate(today.getDate() + estDaysLeft);
 
   const topicMastery = [
     { label: 'Arrays', color: '#8b5cf6', category: 'Arrays' },
-    { label: 'Binary Search', color: '#3b82f6', category: 'Binary Search' },
-    { label: 'Linked List', color: '#10b981', category: 'Linked List' },
+    { label: 'Binary Search', color: '#6366f1', category: 'Binary Search' },
+    { label: 'Linked List', color: '#ec4899', category: 'Linked List' },
     { label: 'Dynamic Programming', color: '#f59e0b', category: 'Dynamic Programming' },
     { label: 'Graphs', color: '#ef4444', category: 'Graphs' },
   ].map(topic => {
     const total = PROBLEMS.filter(p => p.category === topic.category).length;
     const solved = PROBLEMS.filter(p => p.category === topic.category && completedProblems[p.id]).length;
     const percentage = total > 0 ? (solved / total * 100).toFixed(0) : "0";
-    return { ...topic, value: `${percentage}%` };
+    return { ...topic, solved, total, percentage: parseInt(percentage) };
   });
 
-  useEffect(() => {
-    const fetchAIInsights = async () => {
-      if (isInvalidRange) return;
-      setIsAiLoading(true);
-      try {
-        const insights = await generateRecoveryPlan({
-          completedCount,
-          totalProblems,
-          daysRemaining,
-          requiredRate,
-          backlog,
-          isBehind,
-          topicMastery
-        });
-        setAiInsights(insights);
-      } catch (error) {
-        console.error("AI Insight Error:", error);
-      } finally {
-        setIsAiLoading(false);
-      }
+  // Simulated Pacing Chart Data
+  const pacingData = Array.from({ length: 7 }, (_, i) => {
+    const d = new Date();
+    d.setDate(d.getDate() - (6 - i));
+    return {
+      name: d.toLocaleDateString('en-US', { weekday: 'short' }),
+      target: Math.floor(originalRate * (daysPassed - (6 - i))),
+      actual: Math.max(0, completedCount - Math.floor(Math.random() * 5 * (6 - i)))
     };
+  });
 
+  const fetchAIInsights = async (customQuery?: string) => {
+    if (isInvalidRange) return;
+    setIsAiLoading(true);
+    try {
+      const insights = await generateRecoveryPlan({
+        completedCount,
+        totalProblems: totalProblemsCount,
+        daysRemaining,
+        requiredRate,
+        backlog: Math.max(0, backlog),
+        isBehind,
+        isAhead,
+        topicMastery: topicMastery.map(t => ({ label: t.label, value: `${t.percentage}%` }))
+      }, customQuery);
+      setAiInsights(insights);
+    } catch (error) {
+      console.error("AI Insight Error:", error);
+    } finally {
+      setIsAiLoading(false);
+    }
+  };
+
+  useEffect(() => {
     fetchAIInsights();
   }, [completedCount, schedule, isInvalidRange]);
 
   return (
-    <div className="space-y-8 animate-fade-in pb-12">
-      {/* Pacing Engine Header */}
-      <div className="grid grid-cols-1 lg:grid-cols-3 gap-6">
-        <div className="lg:col-span-2 bg-surface-container-low p-8 rounded-[2rem] border border-white/5 relative overflow-hidden group">
-          <div className="absolute top-0 right-0 p-8 opacity-10 group-hover:opacity-20 transition-opacity">
-            <Target size={120} />
-          </div>
-          <div className="relative z-10 flex flex-col md:flex-row justify-between gap-8">
-            <div className="space-y-6 flex-1">
+    <div className="space-y-8 animate-fade-in pb-20">
+      {/* Top Impact Header */}
+      <div className="grid grid-cols-1 md:grid-cols-4 gap-6">
+        {[
+          { label: 'Solve Velocity', value: currentVelocity.toFixed(1), unit: 'P/day', icon: Zap, color: 'text-primary' },
+          { label: 'System Pacing', value: requiredRate.toFixed(1), unit: 'Required', icon: Target, color: 'text-secondary' },
+          { label: 'Total Solved', value: completedCount, unit: 'Problems', icon: CheckCircle2, color: 'text-green-500' },
+          { label: 'Net Backlog', value: Math.abs(backlog), unit: isBehind ? 'Behind' : 'Ahead', icon: History, color: isBehind ? 'text-error' : 'text-primary' },
+        ].map((stat, i) => (
+          <motion.div 
+            initial={{ opacity: 0, y: 20 }}
+            animate={{ opacity: 1, y: 0 }}
+            transition={{ delay: i * 0.1 }}
+            key={stat.label} 
+            className="bg-surface-container-low p-6 rounded-3xl border border-white/5 relative overflow-hidden group"
+          >
+            <div className="absolute -right-4 -bottom-4 opacity-5 group-hover:scale-110 transition-transform duration-500">
+               <stat.icon size={80} />
+            </div>
+            <p className="text-[10px] font-black uppercase tracking-widest text-neutral-500 mb-2">{stat.label}</p>
+            <div className="flex items-baseline gap-2">
+              <span className={cn("text-3xl font-black tracking-tight", stat.color)}>{stat.value}</span>
+              <span className="text-[10px] font-bold text-neutral-600 uppercase">{stat.unit}</span>
+            </div>
+          </motion.div>
+        ))}
+      </div>
+
+      <div className="grid lg:grid-cols-12 gap-8">
+        {/* Left Col: Roadmap & Control */}
+        <div className="lg:col-span-8 space-y-8">
+          {/* Main Chart Box */}
+          <div className="bg-surface-container-low p-10 rounded-[2.5rem] border border-white/5 relative overflow-hidden group min-h-[450px]">
+            <div className="flex justify-between items-start mb-10">
               <div>
-                <h3 className="text-3xl font-black text-on-surface tracking-tight mb-2">Pacing Engine</h3>
-                <p className="text-on-surface-variant text-sm max-w-sm">Intelligent roadmap management based on your target date.</p>
+                <h3 className="text-3xl font-black tracking-tighter text-on-surface">Pacing Trajectory</h3>
+                <p className="text-on-surface-variant text-sm font-medium">Visualizing your execution vs mathematical roadmap.</p>
               </div>
-              
-              <div className="flex flex-col gap-4">
-                <div className="grid grid-cols-2 gap-4">
-                  <div className={cn("bg-background/40 p-4 rounded-2xl border transition-colors", isInvalidRange ? "border-error/50" : "border-white/5")}>
-                    <p className="text-[10px] uppercase font-bold text-on-surface-variant mb-1">Target End Date</p>
+              <div className="flex bg-neutral-900 p-1.5 rounded-xl border border-white/5 shadow-inner">
+                <span className="px-3 py-1.5 text-[10px] font-bold text-on-surface uppercase flex items-center gap-2">
+                  <div className="w-2.5 h-2.5 rounded-full bg-secondary shadow-[0_0_8px_var(--color-secondary)]" /> Actual
+                </span>
+                <span className="px-3 py-1.5 text-[10px] font-bold text-on-surface uppercase flex items-center gap-2">
+                  <div className="w-2.5 h-2.5 rounded-full bg-primary shadow-[0_0_8px_var(--color-primary)]" /> Target
+                </span>
+              </div>
+            </div>
+
+            <div className="h-[300px] w-full">
+              <ResponsiveContainer width="100%" height="100%">
+                <AreaChart data={pacingData}>
+                  <defs>
+                    <linearGradient id="colorActual" x1="0" y1="0" x2="0" y2="1">
+                      <stop offset="5%" stopColor="#c026d3" stopOpacity={0.3}/>
+                      <stop offset="95%" stopColor="#c026d3" stopOpacity={0}/>
+                    </linearGradient>
+                    <linearGradient id="colorTarget" x1="0" y1="0" x2="0" y2="1">
+                      <stop offset="5%" stopColor="#8b5cf6" stopOpacity={0.1}/>
+                      <stop offset="95%" stopColor="#8b5cf6" stopOpacity={0}/>
+                    </linearGradient>
+                  </defs>
+                  <CartesianGrid strokeDasharray="3 3" vertical={false} stroke="#ffffff05" />
+                  <XAxis 
+                    dataKey="name" 
+                    axisLine={false} 
+                    tickLine={false} 
+                    tick={{ fill: '#737373', fontSize: 10, fontWeight: 700 }}
+                  />
+                  <YAxis hide />
+                  <Tooltip 
+                    contentStyle={{ backgroundColor: '#0d0d0d', border: '1px solid rgba(255,255,255,0.05)', borderRadius: '16px', boxShadow: '0 20px 25px -5px rgba(0, 0, 0, 0.1)' }}
+                    itemStyle={{ fontSize: '10px', fontWeight: 'bold', textTransform: 'uppercase' }}
+                  />
+                  <Area type="monotone" dataKey="target" stroke="#8b5cf6" fillOpacity={1} fill="url(#colorTarget)" strokeWidth={2} dot={{ r: 4, fill: '#8b5cf6', strokeWidth: 0 }} />
+                  <Area type="monotone" dataKey="actual" stroke="#c026d3" fillOpacity={1} fill="url(#colorActual)" strokeWidth={3} dot={{ r: 5, fill: '#c026d3', strokeWidth: 2, stroke: '#0d0d0d' }} />
+                </AreaChart>
+              </ResponsiveContainer>
+            </div>
+          </div>
+
+          <div className="grid md:grid-cols-2 gap-8">
+            {/* 1. Target Management Section */}
+            <div className="bg-surface-container-low p-8 rounded-[2.5rem] border border-white/5 relative overflow-hidden flex flex-col justify-between">
+              <div>
+                <h3 className="text-xl font-bold text-on-surface mb-2">Project Calibration</h3>
+                <p className="text-xs text-on-surface-variant mb-6">Modify your timeline to force a system-wide recalculation.</p>
+                <div className="space-y-4">
+                  <div className={cn("bg-background/60 p-4 rounded-2xl border transition-all", isInvalidRange ? "border-error/50" : "border-white/5")}>
+                    <p className="text-[9px] uppercase font-bold text-neutral-500 mb-1">Target Deadline</p>
                     <input 
                       type="date"
                       value={tempDates.end}
                       onChange={(e) => setTempDates({ ...tempDates, end: e.target.value })}
-                      className="bg-transparent text-primary font-bold outline-none border-none text-lg w-full"
+                      className="bg-transparent text-primary font-black outline-none border-none text-lg w-full"
                     />
                   </div>
-                  <div className={cn("bg-background/40 p-4 rounded-2xl border transition-colors", isInvalidRange ? "border-error/50" : "border-white/5")}>
-                    <p className="text-[10px] uppercase font-bold text-on-surface-variant mb-1">Start Date</p>
-                    <input 
-                      type="date"
-                      value={tempDates.start}
-                      onChange={(e) => setTempDates({ ...tempDates, start: e.target.value })}
-                      className="bg-transparent text-on-surface-variant font-bold outline-none border-none text-lg w-full"
-                    />
-                  </div>
+                  <button 
+                    onClick={() => onUpdateSchedule(tempDates.start, tempDates.end)}
+                    className="w-full py-4 bg-on-surface text-background font-black rounded-2xl text-[10px] tracking-widest uppercase hover:brightness-110 active:scale-95 transition-all shadow-xl"
+                  >
+                    SYNC ENGINE
+                  </button>
                 </div>
-                {isInvalidRange && (
-                  <p className="text-xs text-error font-bold flex items-center gap-2">
-                    <AlertCircle size={14} /> Start date must be before target end date.
-                  </p>
-                )}
-                <button 
-                  onClick={() => onUpdateSchedule(tempDates.start, tempDates.end)}
-                  className="w-full py-3 bg-primary text-white font-bold rounded-xl text-xs tracking-widest uppercase hover:brightness-110 active:scale-[0.98] transition-all"
-                >
-                  CALCULATE SCHEDULE
-                </button>
               </div>
             </div>
 
-            <div className="shrink-0 flex flex-col items-center justify-center bg-white/5 p-8 rounded-3xl border border-white/5 min-w-[200px]">
-              <p className="text-[10px] uppercase font-bold text-on-surface-variant mb-2">Required Rate</p>
-              <div className="text-5xl font-black text-primary mb-1">{requiredRate.toFixed(1)}</div>
-              <p className="text-[10px] font-bold text-on-surface-variant">Problems / Day</p>
+            {/* 2. New Feature: Predictive Forecast */}
+            <div className="bg-surface-container-low p-8 rounded-[2.5rem] border border-white/5 relative overflow-hidden flex flex-col justify-between group">
+              <div className="absolute top-0 right-0 p-8 opacity-5 group-hover:scale-125 transition-transform duration-700">
+                <Flame size={120} className="text-primary" />
+              </div>
+              <div className="relative z-10">
+                <h3 className="text-xl font-bold text-on-surface mb-2">Completion Forecast</h3>
+                <p className="text-xs text-on-surface-variant mb-6">Estimated date based on your actual solve velocity.</p>
+                
+                <div className="flex flex-col items-center justify-center py-6 bg-white/5 rounded-3xl border border-white/5 mb-4">
+                  <span className={cn(
+                    "text-3xl font-black tabular-nums transition-colors",
+                    estDaysLeft === Infinity ? "text-neutral-700" : isBehind ? "text-error" : "text-primary"
+                  )}>
+                    {estDaysLeft === Infinity ? 'CALC...' : estEndDate.toLocaleDateString('en-US', { month: 'short', day: 'numeric', year: 'numeric' })}
+                  </span>
+                  <span className="text-[10px] font-bold text-neutral-500 uppercase tracking-widest mt-1">
+                    {estDaysLeft === Infinity ? 'Waiting for Data' : `${estDaysLeft} Days to Finish`}
+                  </span>
+                </div>
+                <div className="flex items-center gap-2 px-4">
+                   <div className={cn("w-2 h-2 rounded-full animate-pulse", isBehind ? "bg-error" : "bg-primary")} />
+                   <p className="text-[10px] font-bold text-on-surface-variant uppercase underline decoration-primary/50 underline-offset-4">
+                      {isBehind ? "High Criticality" : "Linear Trajectory"}
+                   </p>
+                </div>
+              </div>
             </div>
           </div>
         </div>
 
-        <div className={cn(
-          "bg-surface-container-low p-8 rounded-[2rem] border flex flex-col justify-between transition-colors",
-          (isBehind || isInvalidRange) ? "border-error/20" : "border-primary/20"
-        )}>
-          <div className="flex justify-between items-start">
-            <div className={cn(
-              "w-12 h-12 rounded-2xl flex items-center justify-center mb-6 shadow-xl",
-              isBehind || isInvalidRange ? "bg-error/10 text-error" : "bg-primary/10 text-primary"
+        {/* Right Col: Priority Management */}
+        <div className="lg:col-span-4 space-y-8">
+           {/* Schedule Status */}
+           <div className={cn(
+              "p-8 rounded-[2.5rem] border transition-all duration-500 relative overflow-hidden group h-fit",
+              isBehind ? "bg-red-950/20 border-red-500/20 shadow-lg shadow-red-500/5" : isAhead ? "bg-green-950/20 border-green-500/20 shadow-lg shadow-green-500/5" : "bg-primary-950/20 border-primary/20 shadow-lg shadow-primary/5"
             )}>
-              {isBehind || isInvalidRange ? <History size={24} /> : <TrendingDown size={24} className="rotate-180" />}
+              <div className="flex items-center gap-4 mb-6">
+                <div className={cn(
+                  "w-12 h-12 rounded-2xl flex items-center justify-center shadow-2xl",
+                  isBehind ? "bg-red-500 text-white" : isAhead ? "bg-green-500 text-white" : "bg-primary text-white"
+                )}>
+                  {isBehind ? <ArrowDownRight size={24} /> : isAhead ? <ArrowUpRight size={24} /> : <Zap size={24} />}
+                </div>
+                <div>
+                  <h4 className="text-xl font-bold tracking-tight text-on-surface">System Status</h4>
+                  <p className={cn("text-[10px] font-black uppercase tracking-widest", isBehind ? "text-red-400" : "text-primary")}>
+                    {isBehind ? 'Action Required' : isAhead ? 'Safety Buffer' : 'Linear Sync'}
+                  </p>
+                </div>
+              </div>
+
+              <div className="space-y-4">
+                <h4 className="text-3xl font-black tracking-tighter leading-none text-on-surface">
+                  {isBehind ? `${Math.abs(backlog)} Problems Behind` : isAhead ? `${Math.abs(backlog)} Ahead of Plan` : 'Perfectly Sync'}
+                </h4>
+                <p className="text-xs text-on-surface-variant font-medium leading-relaxed">
+                  {isBehind 
+                    ? "Your execution pipeline is congested. Gemini suggests offloading Easy problems to clear the backlog." 
+                    : isAhead 
+                      ? "You've decoupled from the roadmap velocity. Optimal time to tackle 'Hard' difficulty modules." 
+                      : "Balanced execution detected. No tactical shifts required at this moment."}
+                </p>
+              </div>
             </div>
-            {isInvalidRange ? (
-              <span className="text-[10px] font-bold uppercase tracking-widest bg-error text-white px-3 py-1 rounded-full">INVALID DATES</span>
-            ) : isBehind ? (
-              <span className="text-[10px] font-bold uppercase tracking-widest bg-error text-white px-3 py-1 rounded-full">BEHIND SCHEDULE</span>
+
+            {/* Topic Distribution */}
+            <div className="bg-surface-container-low p-8 rounded-[2.5rem] border border-white/5 shadow-xl">
+               <h3 className="text-lg font-bold mb-6 text-on-surface">Mastery Distribution</h3>
+               <div className="space-y-6">
+                  {topicMastery.map((topic, i) => (
+                    <motion.div 
+                      key={topic.label} 
+                      className="space-y-2"
+                      initial={{ opacity: 0, x: 20 }}
+                      animate={{ opacity: 1, x: 0 }}
+                      transition={{ delay: i * 0.1 }}
+                    >
+                      <div className="flex justify-between text-[10px] font-bold uppercase tracking-widest">
+                        <span className="text-neutral-500">{topic.label}</span>
+                        <span className="text-on-surface">{topic.percentage}%</span>
+                      </div>
+                      <div className="h-1.5 w-full bg-white/5 rounded-full overflow-hidden">
+                        <motion.div 
+                          initial={{ width: 0 }}
+                          animate={{ width: `${topic.percentage}%` }}
+                          transition={{ duration: 1.5, ease: "easeOut" }}
+                          className="h-full rounded-full shadow-[0_0_10px_currentColor]" 
+                          style={{ backgroundColor: topic.color, color: topic.color }} 
+                        />
+                      </div>
+                    </motion.div>
+                  ))}
+               </div>
+            </div>
+          </div>
+        </div>
+
+      {/* 4. Large AI Intelligent Command Hub */}
+      <div className="bg-surface-container-low rounded-[3rem] border border-white/5 relative overflow-hidden flex flex-col lg:flex-row shadow-2xl min-h-[500px]">
+        <div className="lg:w-1/3 p-12 bg-white/[0.02] border-r border-white/5 flex flex-col justify-between">
+          <div>
+            <div className="w-16 h-16 rounded-3xl bg-primary/10 text-primary flex items-center justify-center mb-8 shadow-inner">
+              <Sparkles size={32} />
+            </div>
+            <h4 className="text-4xl font-black tracking-tighter text-on-surface mb-4">Intelligence Hub</h4>
+            <p className="text-on-surface-variant leading-relaxed text-sm">
+              Your personal neural strategist. Analyzing your performance patterns to deliver optimized recovery and acceleration vectors.
+            </p>
+          </div>
+
+          <div className="space-y-6 pt-12">
+            <div className="flex items-center gap-4">
+               <div className="w-12 h-12 rounded-full bg-gradient-to-br from-primary to-secondary p-0.5 shadow-lg shadow-primary/20">
+                  <div className="w-full h-full bg-surface-container rounded-full flex items-center justify-center">
+                     <Brain size={20} className="text-primary" />
+                  </div>
+               </div>
+               <div>
+                 <p className="text-xs font-black text-on-surface">Nexus Core AI</p>
+                 <p className="text-[10px] font-bold text-neutral-600 uppercase tracking-widest">V 1.4.2 Active</p>
+               </div>
+            </div>
+            <div className="flex gap-2">
+              <span className="px-3 py-1 rounded-full bg-green-500/10 text-green-500 text-[8px] font-black uppercase tracking-widest border border-green-500/20">Synced</span>
+              <span className="px-3 py-1 rounded-full bg-primary/10 text-primary text-[8px] font-black uppercase tracking-widest border border-primary/20">Real-time</span>
+            </div>
+          </div>
+        </div>
+
+        <div className="flex-1 p-12 flex flex-col">
+          <div className="flex-1">
+            <div className="flex items-center gap-3 mb-8">
+              <div className="w-2 h-2 rounded-full bg-primary animate-pulse" />
+              <p className="text-[10px] font-black uppercase tracking-widest text-neutral-500">Latest Tactical Analysis</p>
+            </div>
+
+            {isAiLoading ? (
+              <div className="space-y-6">
+                <div className="h-4 w-full bg-white/5 rounded-full animate-pulse" />
+                <div className="h-4 w-5/6 bg-white/5 rounded-full animate-pulse" />
+                <div className="h-4 w-4/6 bg-white/5 rounded-full animate-pulse" />
+                <div className="h-20 w-full bg-white/5 rounded-3xl animate-pulse mt-12" />
+              </div>
             ) : (
-              <span className="text-[10px] font-bold uppercase tracking-widest bg-primary text-white px-3 py-1 rounded-full">ON TRACK</span>
+              <motion.div 
+                initial={{ opacity: 0, y: 10 }}
+                animate={{ opacity: 1, y: 0 }}
+                className="prose prose-invert prose-lg max-w-none text-on-surface-variant font-medium leading-relaxed custom-markdown-expanded"
+              >
+                <Markdown>{aiInsights}</Markdown>
+              </motion.div>
             )}
           </div>
           
-          <div>
-            <h4 className="text-2xl font-bold mb-1">
-              {isInvalidRange ? 'Audit Required' : isBehind ? `${backlog} Problems Behind` : 'Leading Target'}
-            </h4>
-            <p className="text-on-surface-variant text-sm">
-              {isInvalidRange 
-                ? 'Please check your schedule dates to generate a valid roadmap.'
-                : isBehind 
-                  ? `Increase your daily rate by ${Math.max(0, requiredRate - originalRate).toFixed(1)} to recover.`
-                  : `Continue with ${requiredRate.toFixed(1)} problems/day to finish early.`}
+          <div className="mt-12 group">
+            <div className="relative">
+              <input 
+                type="text" 
+                value={userQuery}
+                onChange={(e) => setUserQuery(e.target.value)}
+                onKeyDown={(e) => {
+                  if (e.key === 'Enter' && userQuery.trim()) {
+                    fetchAIInsights(userQuery);
+                    setUserQuery("");
+                  }
+                }}
+                placeholder="Ask your AI Coach for a specific strategy (e.g., 'How to master DP in 5 days?')" 
+                className="w-full bg-background border border-white/5 rounded-[2rem] px-8 py-5 text-sm font-medium outline-none focus:border-primary/50 transition-all focus:ring-4 focus:ring-primary/5 placeholder:text-neutral-600 pr-32"
+              />
+              <button 
+                onClick={() => {
+                  if (userQuery.trim()) {
+                    fetchAIInsights(userQuery);
+                    setUserQuery("");
+                  }
+                }}
+                disabled={isAiLoading}
+                className="absolute right-3 top-3 bottom-3 px-6 bg-primary text-white font-black text-[10px] uppercase tracking-widest rounded-2xl hover:scale-105 active:scale-95 transition-all shadow-lg shadow-primary/20 disabled:opacity-50"
+              >
+                {isAiLoading ? 'THINKING...' : 'ASK NEXUS'}
+              </button>
+            </div>
+            <p className="mt-4 text-[10px] text-neutral-600 font-bold uppercase tracking-wider text-center">
+              Nexus uses your real-time analytics to formulate specialized responses.
             </p>
-          </div>
-        </div>
-      </div>
-
-      <div className="bento-grid">
-        <div className="col-span-8 bg-[#111] p-10 rounded-[2rem] border border-white/5">
-          <h3 className="text-xl font-bold mb-8">Pace Visualization</h3>
-          <div className="h-[300px] w-full">
-            <ResponsiveContainer width="100%" height="100%">
-              <BarChart data={chartData}>
-                <CartesianGrid strokeDasharray="3 3" vertical={false} stroke="#ffffff05" />
-                <XAxis 
-                  dataKey="name" 
-                  axisLine={false} 
-                  tickLine={false} 
-                  tick={{ fill: '#737373', fontSize: 10, fontWeight: 700 }}
-                  dy={15}
-                />
-                <YAxis hide />
-                <Tooltip 
-                  cursor={{ fill: 'rgba(255,b,255,0.02)' }}
-                  contentStyle={{ backgroundColor: '#0d0d0d', border: '1px solid rgba(255,255,255,0.05)', borderRadius: '16px' }}
-                />
-                <Bar 
-                  dataKey="value" 
-                  radius={[12, 12, 0, 0]}
-                  barSize={60}
-                  animationDuration={1000}
-                >
-                  {chartData.map((entry, index) => (
-                    <Cell 
-                      key={`cell-${index}`} 
-                      fill={entry.name === 'Target' ? '#38bdf8' : entry.name === 'Actual' ? '#818cf8' : '#f472b6'} 
-                    />
-                  ))}
-                </Bar>
-              </BarChart>
-            </ResponsiveContainer>
-          </div>
-        </div>
-
-        <div className="col-span-4 space-y-6">
-          <div className="bg-surface-container-low p-8 rounded-[2rem] border border-white/5">
-            <h3 className="text-xl font-bold mb-6">Mastery Matrix</h3>
-            <div className="space-y-6">
-              {topicMastery.map((topic) => (
-                <div key={topic.label} className="space-y-2">
-                  <div className="flex justify-between text-[10px] font-bold uppercase tracking-widest text-on-surface-variant">
-                    <span>{topic.label}</span>
-                    <span className="text-on-surface font-mono">{topic.value}</span>
-                  </div>
-                  <div className="h-1.5 w-full bg-white/5 rounded-full overflow-hidden">
-                    <div 
-                      className="h-full rounded-full transition-all duration-1000" 
-                      style={{ width: topic.value, backgroundColor: topic.color }} 
-                    />
-                  </div>
-                </div>
-              ))}
-            </div>
-          </div>
-        </div>
-
-        {/* Gemini AI Powered Backlog Recovery Strategy */}
-        <div className="col-span-12 bg-surface-container-high/40 p-10 rounded-[2rem] border border-white/5 backdrop-blur-xl group overflow-hidden relative">
-          <div className="absolute -right-20 -bottom-20 w-80 h-80 bg-primary/5 rounded-full blur-[100px] group-hover:bg-primary/10 transition-all" />
-          <div className="relative z-10 flex flex-col md:flex-row items-start gap-10">
-            <div className="w-24 h-24 shrink-0 bg-gradient-to-br from-primary to-secondary rounded-3xl flex items-center justify-center text-white shadow-2xl">
-              {isAiLoading ? (
-                <div className="w-12 h-12 border-4 border-white/30 border-t-white rounded-full animate-spin" />
-              ) : (
-                <BrainCircuit size={48} />
-              )}
-            </div>
-            <div className="flex-1 text-center md:text-left">
-              <div className="flex items-center justify-center md:justify-start gap-3 mb-3">
-                <h3 className="text-3xl font-black text-on-surface tracking-tight">Gemini AI Coaching</h3>
-                <span className="px-2 py-0.5 bg-primary/20 text-primary text-[10px] font-bold rounded uppercase tracking-widest border border-primary/30">Intelligence Active</span>
-              </div>
-              
-              <div className="prose prose-invert max-w-none text-on-surface-variant leading-relaxed">
-                {isAiLoading ? (
-                   <p className="animate-pulse">Gemini is analyzing your execution velocity and topic mastery matrix...</p>
-                ) : (
-                   <div className="markdown-body">
-                     <Markdown>{aiInsights}</Markdown>
-                   </div>
-                )}
-              </div>
-              
-              <div className="flex flex-wrap justify-center md:justify-start gap-3 mt-8">
-                {['Dynamic Pacing', 'Topic Precision', 'Audit Log'].map(tag => (
-                   <span key={tag} className="text-[10px] font-bold uppercase tracking-widest bg-white/5 px-4 py-2 rounded-xl border border-white/5 text-on-surface-variant">
-                     {tag}
-                   </span>
-                ))}
-              </div>
-            </div>
-            <button 
-              onClick={() => {
-                window.scrollTo({ top: 0, behavior: 'smooth' });
-              }}
-              className="px-10 py-4 bg-on-surface text-background font-bold rounded-[1.5rem] hover:opacity-90 transition-opacity tracking-widest text-xs uppercase shadow-2xl shrink-0"
-            >
-              REVISE PLAN
-            </button>
           </div>
         </div>
       </div>
@@ -919,99 +1077,225 @@ const TimerPage = () => {
 };
 ;
 
+const DEFAULT_SNIPPETS: Record<string, string> = {
+  python: `def two_sum(nums, target):
+    prev_map = {} # val : index
+    for i, n in enumerate(nums):
+        diff = target - n
+        if diff in prev_map:
+            return [prev_map[diff], i]
+        prev_map[n] = i
+    return []
+
+# Test Case
+print(two_sum([2, 7, 11, 15], 9))`,
+  cpp: `#include <iostream>
+#include <vector>
+#include <unordered_map>
+
+using namespace std;
+
+vector<int> twoSum(vector<int>& nums, int target) {
+    unordered_map<int, int> prevMap;
+    for (int i = 0; i < nums.size(); i++) {
+        int diff = target - nums[i];
+        if (prevMap.find(diff) != prevMap.end()) {
+            return {prevMap[diff], i};
+        }
+        prevMap[nums[i]] = i;
+    }
+    return {};
+}
+
+int main() {
+    vector<int> nums = {2, 7, 11, 15};
+    int target = 9;
+    vector<int> result = twoSum(nums, target);
+    if (!result.empty())
+        cout << "[" << result[0] << ", " << result[1] << "]" << endl;
+    return 0;
+}`,
+  c: `#include <stdio.h>
+#include <stdlib.h>
+
+int* twoSum(int* nums, int numsSize, int target, int* returnSize) {
+    *returnSize = 2;
+    int* result = (int*)malloc(2 * sizeof(int));
+    for (int i = 0; i < numsSize; i++) {
+        for (int j = i + 1; j < numsSize; j++) {
+            if (nums[i] + nums[j] == target) {
+                result[0] = i;
+                result[1] = j;
+                return result;
+            }
+        }
+    }
+    return NULL;
+}
+
+int main() {
+    int nums[] = {2, 7, 11, 15};
+    int returnSize;
+    int* result = twoSum(nums, 4, 9, &returnSize);
+    if (result) {
+        printf("[%d, %d]\\n", result[0], result[1]);
+        free(result);
+    }
+    return 0;
+}`,
+  java: `import java.util.*;
+
+public class Solution {
+    public static int[] twoSum(int[] nums, int target) {
+        Map<Integer, Integer> prevMap = new HashMap<>();
+        for (int i = 0; i < nums.length; i++) {
+            int diff = target - nums[i];
+            if (prevMap.containsKey(diff)) {
+                return new int[] { prevMap.get(diff), i };
+            }
+            prevMap.put(nums[i], i);
+        }
+        return new int[] {};
+    }
+
+    public static void main(String[] args) {
+        int[] result = twoSum(new int[] { 2, 7, 11, 15 }, 9);
+        System.out.println(Arrays.toString(result));
+    }
+}`
+};
+
 const CodeEditor = () => {
+  const [language, setLanguage] = useState('python');
+  const [code, setCode] = useState(DEFAULT_SNIPPETS.python);
+  const [output, setOutput] = useState('');
+  const [isRunning, setIsRunning] = useState(false);
+  const [stats, setStats] = useState({ runtime: '0ms', memory: '0KB' });
+
+  const runCode = async () => {
+    setIsRunning(true);
+    setOutput('Nexus Intelligence Engine: Compiling and simulating execution...');
+    
+    try {
+      const result = await simulateExecution(code, language);
+      
+      if (result.stderr) {
+        setOutput(result.stderr);
+      } else {
+        setOutput(result.stdout || 'Execution finished with no output.');
+        // Optionally show the Nexus hint as a bonus if output exists
+        if (result.nexusHint) {
+          setOutput(prev => prev + '\n\n---\nNEXUS TACTICAL HINT:\n' + result.nexusHint);
+        }
+      }
+      
+      setStats({
+        runtime: result.runtime,
+        memory: result.memory
+      });
+    } catch (error) {
+      setOutput('Failed to connect to Nexus Intelligence Engine.');
+      console.error(error);
+    } finally {
+      setIsRunning(false);
+    }
+  };
+
+  const handleLanguageChange = (newLang: string) => {
+    setLanguage(newLang);
+    setCode(DEFAULT_SNIPPETS[newLang]);
+    setOutput('');
+  };
+
   return (
-    <div className="flex flex-col lg:flex-row h-[calc(100vh-12rem)] bg-surface-container-low rounded-3xl overflow-hidden border border-white/5 animate-fade-in">
+    <div className="flex flex-col lg:flex-row h-[750px] bg-surface-container rounded-3xl overflow-hidden border border-white/5 animate-fade-in shadow-2xl relative z-10">
       {/* Editor Main */}
       <div className="flex-1 flex flex-col min-w-0">
         <div className="px-6 py-4 bg-surface-container-high border-b border-white/5 flex justify-between items-center">
           <div className="flex items-center gap-4">
-            <div className="flex items-center bg-neutral-900 rounded-lg px-3 py-1.5 gap-2 border border-white/5">
-              <Binary size={14} className="text-secondary" />
-              <span className="text-xs font-bold">Python 3</span>
-            </div>
+            {['python', 'cpp', 'c', 'java'].map((lang) => (
+              <button
+                key={lang}
+                onClick={() => handleLanguageChange(lang)}
+                className={cn(
+                  "flex items-center gap-2 px-3 py-1.5 rounded-lg border transition-all",
+                  language === lang 
+                    ? "bg-primary border-primary text-white" 
+                    : "bg-neutral-900 border-white/5 text-on-surface-variant hover:text-on-surface"
+                )}
+              >
+                <Binary size={14} />
+                <span className="text-[10px] font-bold uppercase tracking-wider">
+                  {lang === 'cpp' ? 'C++' : lang.toUpperCase()}
+                </span>
+              </button>
+            ))}
           </div>
           <div className="flex items-center gap-2">
-            <button className="p-2 text-on-surface-variant hover:text-on-surface transition-colors"><Settings size={18} /></button>
-            <button className="p-2 text-on-surface-variant hover:text-on-surface transition-colors"><MoreVertical size={18} /></button>
+            <button className="p-2 text-on-surface-variant hover:text-on-surface transition-colors cursor-help"><Settings size={18} /></button>
           </div>
         </div>
         
-        <div className="flex-1 bg-background p-8 font-mono text-sm overflow-auto text-on-surface/90">
-          <div className="flex gap-6">
-            <div className="text-neutral-700 text-right select-none space-y-1">
-              {Array.from({length: 12}).map((_, i) => <div key={i}>{i+1}</div>)}
-            </div>
-            <div className="whitespace-pre leading-relaxed">
-              <span className="text-secondary">class</span> <span className="text-primary">Solution</span>:{"\n"}
-              {"    "}<span className="text-secondary">def</span> <span className="text-primary">twoSum</span>(self, nums: List[int], target: int) -&gt; List[int]:{"\n"}
-              {"        "}<span className="text-neutral-600"># Dictionary to store value and index</span>{"\n"}
-              {"        "}prevMap = {"{}"} {"\n\n"}
-              {"        "}<span className="text-secondary">for</span> i, n <span className="text-secondary">in</span> enumerate(nums):{"\n"}
-              {"            "}diff = target - n{"\n"}
-              {"            "}<span className="text-secondary">if</span> diff <span className="text-secondary">in</span> prevMap:{"\n"}
-              {"                "}<span className="text-secondary">return</span> [prevMap[diff], i]{"\n"}
-              {"            "}prevMap[n] = i{"\n\n"}
-              {"        "}<span className="text-secondary">return</span> []
-            </div>
-          </div>
+        <div className="flex-1 bg-[#0a0a0a] p-0 font-mono text-sm overflow-auto text-on-surface/90">
+          <Editor
+            value={code}
+            onValueChange={setCode}
+            highlight={(code) => highlight(code, languages[language === 'python' ? 'python' : language === 'cpp' ? 'cpp' : language === 'c' ? 'c' : 'java'], language)}
+            padding={32}
+            className="min-h-full outline-none"
+            style={{
+              fontFamily: '"JetBrains Mono", "Fira Code", monospace',
+              fontSize: 14,
+            }}
+          />
         </div>
       </div>
 
       {/* Sidebar/Result */}
       <div className="w-full lg:w-[450px] bg-surface-container-high border-l border-white/5 flex flex-col">
         <div className="flex items-center px-8 pt-4 border-b border-white/5 gap-8">
-          <button className="pb-4 border-b-2 border-primary text-primary font-bold text-xs uppercase tracking-widest">Test Cases</button>
-          <button className="pb-4 border-b-2 border-transparent text-on-surface-variant font-bold text-xs uppercase tracking-widest">Console</button>
+          <button className="pb-4 border-b-2 border-primary text-primary font-bold text-xs uppercase tracking-widest">Console</button>
+          <button className="pb-4 border-b-2 border-transparent text-on-surface-variant font-bold text-xs uppercase tracking-widest opacity-50 cursor-not-allowed">Test Cases</button>
         </div>
         
-        <div className="flex-1 p-8 overflow-auto space-y-8">
-          <div className="flex gap-2">
-            {['Case 1', 'Case 2', 'Case 3'].map((c, i) => (
-              <button key={c} className={cn(
-                "px-4 py-2 rounded-xl text-[10px] font-bold uppercase tracking-widest",
-                i === 0 ? "bg-primary/10 text-primary border border-primary/20" : "bg-neutral-900 text-on-surface-variant"
-              )}>{c}</button>
-            ))}
-          </div>
-
-          <div className="space-y-6">
-            <div>
-              <p className="text-[10px] uppercase font-bold tracking-widest text-on-surface-variant mb-2">Input</p>
-              <div className="bg-neutral-900 p-4 rounded-xl font-mono text-xs text-primary border border-white/5">
-                nums = [2, 7, 11, 15], target = 9
-              </div>
-            </div>
-            <div>
-              <p className="text-[10px] uppercase font-bold tracking-widest text-on-surface-variant mb-2">Expected Output</p>
-              <div className="bg-neutral-900 p-4 rounded-xl font-mono text-xs text-secondary border border-white/5">
-                [0, 1]
-              </div>
+        <div className="flex-1 p-8 overflow-auto space-y-8 bg-[#0a0a0a]">
+          <div>
+            <p className="text-[10px] uppercase font-bold tracking-widest text-on-surface-variant mb-4">Standard Output</p>
+            <div className={cn(
+              "p-6 rounded-2xl font-mono text-xs border bg-black/40 min-h-[200px] whitespace-pre-wrap leading-relaxed",
+              output.includes('Error') || output.includes('Failed') ? "text-error border-error/20" : "text-secondary border-secondary/20"
+            )}>
+              {output || 'Click RUN to execute your logic...'}
             </div>
           </div>
 
-          <div className="pt-6 border-t border-white/5 flex justify-between">
-            <div>
-              <p className="text-[10px] uppercase font-bold tracking-widest text-neutral-500">Runtime</p>
-              <p className="text-xl font-bold text-on-surface">32ms</p>
+          <div className="grid grid-cols-2 gap-4">
+            <div className="bg-white/5 p-6 rounded-2xl border border-white/5">
+              <p className="text-[10px] uppercase font-bold tracking-widest text-neutral-500 mb-1">Runtime</p>
+              <p className="text-xl font-bold text-on-surface">{stats.runtime}</p>
             </div>
-            <div className="text-right">
-              <p className="text-[10px] uppercase font-bold tracking-widest text-neutral-500">Memory</p>
-              <p className="text-xl font-bold text-on-surface">14.2 MB</p>
+            <div className="text-right bg-white/5 p-6 rounded-2xl border border-white/5">
+              <p className="text-[10px] uppercase font-bold tracking-widest text-neutral-500 mb-1">Memory</p>
+              <p className="text-xl font-bold text-on-surface">{stats.memory}</p>
             </div>
           </div>
         </div>
 
         <div className="p-8 bg-surface-container flex gap-4 border-t border-white/5">
           <button 
-            onClick={() => console.log("Running solution...")}
-            className="flex-1 py-4 bg-neutral-900 border border-white/5 text-on-surface font-bold rounded-xl text-xs tracking-widest uppercase hover:bg-white/5 transition-all active:scale-95"
+            onClick={runCode}
+            disabled={isRunning}
+            className={cn(
+              "flex-1 py-4 bg-neutral-900 border border-white/5 text-on-surface font-bold rounded-xl text-xs tracking-widest uppercase transition-all flex items-center justify-center gap-3",
+              isRunning ? "opacity-50" : "hover:bg-white/5 active:scale-95"
+            )}
           >
-            RUN
+            {isRunning ? <div className="w-4 h-4 border-2 border-white/20 border-t-white rounded-full animate-spin" /> : <Play size={16} />}
+            {isRunning ? 'RUNNING' : 'RUN'}
           </button>
           <button 
-            onClick={() => console.log("Submitting to judge...")}
-            className="flex-[1.5] py-4 bg-on-surface text-background font-bold rounded-xl text-xs tracking-widest uppercase hover:bg-neutral-200 transition-all active:scale-95"
+            disabled={isRunning}
+            className="flex-[1.5] py-4 bg-on-surface text-background font-bold rounded-xl text-xs tracking-widest uppercase hover:bg-neutral-200 transition-all active:scale-95 disabled:opacity-50"
           >
             SUBMIT
           </button>
@@ -1261,6 +1545,24 @@ export default function App() {
     }
   };
 
+  const calculateDailyGoal = () => {
+    const today = new Date();
+    const end = new Date(schedule.endDate);
+    const problemsRemaining = PROBLEMS.length - Object.keys(completedProblems).length;
+    const daysRemaining = Math.max(0, Math.ceil((end.getTime() - today.getTime()) / (1000 * 60 * 60 * 24)));
+    
+    if (daysRemaining <= 0) return problemsRemaining;
+    return Math.ceil(problemsRemaining / daysRemaining);
+  };
+
+  const calculateSolvedToday = () => {
+    const todayStr = new Date().toDateString();
+    return Object.values(completedProblems).filter(p => {
+      if (!p.updatedAt) return false;
+      return p.updatedAt.toDate().toDateString() === todayStr;
+    }).length;
+  };
+
   const updateSchedule = async (start: string, end: string) => {
     if (!user) return;
     const scheduleRef = doc(db, 'users', user.uid, 'settings', 'schedule');
@@ -1298,8 +1600,8 @@ export default function App() {
           efficiency={getEfficiency()}
         />
       );
-      case 'topics': return <Topics setActiveTab={setActiveTab} completedProblems={completedProblems} setFilter={setFilter} />;
-      case 'problems': return <Problems user={user!} completedProblems={completedProblems} onToggle={toggleProblem} filter={filter} setFilter={setFilter} />;
+      case 'topics': return <Topics setActiveTab={setActiveTab} completedProblems={completedProblems as any} setFilter={setFilter} />;
+      case 'problems': return <Problems user={user!} completedProblems={completedProblems as any} onToggle={toggleProblem} filter={filter} setFilter={setFilter} />;
       case 'editor': return <CodeEditor />;
       case 'timer': return <TimerPage />;
       case 'analytics': return (
@@ -1310,7 +1612,14 @@ export default function App() {
           onUpdateSchedule={updateSchedule}
         />
       );
-      default: return <Dashboard completedCount={completedCount} setActiveTab={setActiveTab} />;
+      default: return (
+        <Dashboard 
+          completedCount={completedCount} 
+          setActiveTab={setActiveTab} 
+          streak={calculateStreak()}
+          efficiency={getEfficiency()}
+        />
+      );
     }
   };
 
@@ -1380,7 +1689,12 @@ export default function App() {
 
   return (
     <div className="min-h-screen bg-background">
-      <Sidebar activeTab={activeTab} setActiveTab={setActiveTab} />
+      <Sidebar 
+        activeTab={activeTab} 
+        setActiveTab={setActiveTab} 
+        solvedToday={calculateSolvedToday()}
+        dailyGoal={calculateDailyGoal()}
+      />
       <Header title={getTitle()} searchTerm={searchTerm} setSearchTerm={setSearchTerm} user={user} />
       <main className="ml-64 pt-32 pb-16 px-12 max-w-7xl mx-auto">
         <AnimatePresence mode="wait">
