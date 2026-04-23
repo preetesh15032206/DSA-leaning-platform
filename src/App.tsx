@@ -1111,6 +1111,29 @@ export default function App() {
   const [user, setUser] = useState<User | null>(null);
   const [loading, setLoading] = useState(true);
   const [completedProblems, setCompletedProblems] = useState<Record<string, boolean>>({});
+  const [authError, setAuthError] = useState<string | null>(null);
+  const [isLoggingIn, setIsLoggingIn] = useState(false);
+
+  const handleLogin = async () => {
+    setAuthError(null);
+    setIsLoggingIn(true);
+    try {
+      await signInWithGoogle();
+    } catch (error: any) {
+      console.error("Login Error:", error);
+      let message = "Failed to sign in. Please try again.";
+      if (error.code === 'auth/popup-blocked') {
+        message = "Popup was blocked. Please allow popups or open the app in a new tab.";
+      } else if (error.code === 'auth/unauthorized-domain') {
+        message = "This domain is not authorized. Please check your Firebase Console settings.";
+      } else if (error.message) {
+        message = error.message;
+      }
+      setAuthError(message);
+    } finally {
+      setIsLoggingIn(false);
+    }
+  };
 
   useEffect(() => {
     const unsubscribe = onAuthStateChanged(auth, (currentUser) => {
@@ -1157,7 +1180,10 @@ export default function App() {
     };
     testConnection();
 
-    return () => unsubscribe();
+    return () => {
+      unsubscribe();
+      unsubscribeSchedule();
+    };
   }, [user]);
 
   const toggleProblem = async (problemId: string, completed: boolean) => {
@@ -1244,12 +1270,39 @@ export default function App() {
           <p className="text-on-surface-variant mb-10 leading-relaxed font-medium">
             The next generation of algorithmic mastery. Secure your workspace to continue.
           </p>
+          
+          {authError && (
+            <div className="mb-6 p-4 bg-error/10 border border-error/20 rounded-2xl text-error text-xs font-bold flex items-center gap-3">
+              <AlertCircle size={16} />
+              <p className="flex-1 text-left">{authError}</p>
+            </div>
+          )}
+
           <button 
-            onClick={signInWithGoogle}
-            className="w-full py-4 bg-on-surface text-background font-bold rounded-2xl hover:bg-neutral-200 transition-all flex items-center justify-center gap-3 shadow-xl active:scale-95"
+            onClick={handleLogin}
+            disabled={isLoggingIn}
+            className={cn(
+              "w-full py-4 bg-on-surface text-background font-bold rounded-2xl transition-all flex items-center justify-center gap-3 shadow-xl active:scale-95",
+              isLoggingIn ? "opacity-70 cursor-not-allowed" : "hover:bg-neutral-200"
+            )}
           >
-            <LogIn size={20} /> SIGN IN WITH GOOGLE
+            {isLoggingIn ? (
+              <div className="w-5 h-5 border-2 border-background border-t-transparent rounded-full animate-spin" />
+            ) : (
+              <LogIn size={20} />
+            )}
+            {isLoggingIn ? "CONNECTING..." : "SIGN IN WITH GOOGLE"}
           </button>
+
+          {authError && authError.includes("new tab") && (
+            <button 
+              onClick={() => window.open(window.location.href, '_blank')}
+              className="mt-4 text-[10px] font-bold text-primary uppercase tracking-widest hover:underline"
+            >
+              Open in New Tab
+            </button>
+          )}
+
           <p className="text-[10px] text-on-surface-variant mt-8 font-bold uppercase tracking-widest flex items-center justify-center gap-2">
             <Zap size={12} className="text-primary" /> Powered by Nexus Algorithm
           </p>
