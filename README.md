@@ -6,61 +6,63 @@ Nexus Algorithm is a high-performance, ethereal-themed engineering platform desi
 
 ## 🚀 Key Features
 
+- **Secure Full-Stack Architecture**: Custom Express.js backend routes securely proxy Google Gemini AI requests, ensuring sensitive API keys are never exposed to the client browser.
 - **Personalized Pacing Engine**: Set your target completion date, and the platform calculates your daily goal automatically.
-- **AI Recovery Plans**: Integrated with **Google Gemini AI** to analyze your progress and generate "Stress-Free Recovery" plans if you fall behind.
-- **Real-Time Streak Tracking**: Motivation driven by real-time activity logs. Calculate your streak based on consecutive days of problem solving.
+- **AI Code Simulator**: Utilizes **Google Gemini AI** on the backend to simulate code execution, estimate runtime/memory complexity, and provide algorithmic hints.
+- **AI Recovery Plans**: Analyzes your progress and generates "Stress-Free Recovery" plans if you fall behind.
+- **Live Compiler Subsystem**: Integrated with the **Piston API** to support real-time code execution for **C, C++, Python, and Java**.
+- **Real-Time Streak Tracking**: Motivation driven by real-time activity logs and streak calculations.
 - **Comprehensive Problem Set**: Curated list of problems spanning Arrays, Strings, Trees, Graphs, and more.
-- **Live Compiler Subsystem**: Integrated with the **Piston API** to support real-time code execution for **C, C++, Python, and Java**. Test your logic instantly within the platform.
-- **Glassmorphism UI**: A dark, high-contrast interface designed for long coding sessions.
-- **Full-Stack Persistence**: Powered by **Firebase** for secure authentication and real-time data sync across devices.
-- **Pomodoro Focus Timer**: Integrated focus tool to manage deep work blocks.
+- **Database & Auth**: Powered by **Firebase** for strict ABAC (Attribute-Based Access Control) security and real-time syncing.
 
 ## 🛠️ Technology Stack
 
-- **Frontend**: React 18, TypeScript, Vite
-- **Styling**: Tailwind CSS, Motion (f.k.a. Framer Motion)
-- **Database**: Firebase Firestore (NoSQL)
-- **Authentication**: Firebase Google Auth
-- **AI Engine**: Google Gemini Pro (via @google/genai)
-- **Compilation Engine**: Piston API (Multi-language execution)
-- **Visuals**: Recharts (Analytics), Lucide React (Icons)
-- **Deployment**: Optimized for Vercel
-
-## 📖 For Learners: How it works
-
-### Pacing & Analytics
-The platform uses a linear regression-style target line to show you where you *should* be vs. where you *are*.
-- **Blue Line**: Your target path to reach your goal by the deadline.
-- **Indigo Area**: Your actual progress.
-- **Pink Area**: AI-calculated projection.
-
-### AI Integration
-The AI coach doesn't just give hints; it analyzes your "backlog" (the gap between your target and actual progress) and tells you exactly how many extra problems you need to solve over the next few days to get back on track without burning out.
+- **Frontend**: React 19, TypeScript, Vite
+- **Backend / API**: Node.js, Express.js, Vercel Serverless Functions
+- **Styling**: Tailwind CSS, Motion (Framer Motion)
+- **Database / Auth**: Firebase Firestore (NoSQL), Firebase Google Auth
+- **AI Engine**: Google Gemini API (via `@google/genai`)
+- **Visuals**: Recharts (Analytics), Lucide React (Icons), PrismJS (Syntax Highlighting)
+- **Deployment**: Vercel
 
 ## ⚙️ Local Development
 
 1. **Clone and Install**:
    ```bash
    git clone <your-repo-url>
-   cd dsa-leaning-platform
+   cd react-example
    npm install
    ```
 
 2. **Environment Variables**:
    Create a `.env` file based on `.env.example`:
    ```env
-   VITE_GEMINI_API_KEY=your_key_here
+   # Server-side API key for Gemini (NOT prefixed with VITE_)
+   GEMINI_API_KEY=your_gemini_key_here
+   
+   # Public Firebase configurations
+   VITE_FIREBASE_API_KEY=your_firebase_key
+   VITE_FIREBASE_AUTH_DOMAIN=your_domain
+   VITE_FIREBASE_PROJECT_ID=your_id
+   # ... etc
    ```
 
-3. **Firebase Setup**:
-   - Add your Firebase credentials to your `.env` file (see `.env.example`).
-   - If deploying to **Vercel**, make sure to add these variables in the **Vercel Project Settings**.
-   - Authorized domains in Firebase Console: `localhost` and your production URL.
-
-4. **Run**:
+3. **Run the Full-Stack Dev Server**:
    ```bash
    npm run dev
    ```
+   *(This starts the Express server wrapper which automatically serves the Vite frontend.)*
+
+## 🚀 Deployment (Vercel)
+
+This project is configured out-of-the-box for **Vercel** serverless environments. 
+
+1. Push your repository to GitHub.
+2. Import the project into Vercel. 
+3. Under **Environment Variables** in Vercel, ensure you add:
+   - `GEMINI_API_KEY` (Standard Node.js env variable. Do **NOT** use `VITE_` here to keep it hidden securely on the server).
+   - All `VITE_FIREBASE_*` credentials.
+4. Deploy! The `vercel.json` file routing will automatically map your `/api/*` endpoints to Vercel Serverless Functions and serve the React App for all other routes.
 
 ## 📜 License
 This project is for educational purposes. Feel free to use it to level up your algorithmic skills!

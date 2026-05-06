@@ -15,11 +15,30 @@ const PORT = 3000;
 let aiInstance: GoogleGenAI | null = null;
 function getAI() {
   if (!aiInstance) {
-    const key = process.env.GEMINI_API_KEY || process.env.VITE_GEMINI_API_KEY || '';
-    if (!key) {
-      console.warn("GEMINI_API_KEY is missing on server.");
+    const viteKey = process.env.VITE_GEMINI_API_KEY;
+    const geminiKey = process.env.GEMINI_API_KEY;
+    
+    console.log("VITE_GEMINI_API_KEY starts with:", viteKey?.substring(0,4));
+    console.log("GEMINI_API_KEY starts with:", geminiKey?.substring(0,4));
+
+    // Prefer VITE_GEMINI_API_KEY because the user explicitly set it in the UI and it's known to work in the dev server shell
+    let keyToUse = undefined;
+    if (viteKey && viteKey.startsWith("AIz")) {
+      keyToUse = viteKey;
+    } else if (geminiKey && geminiKey.startsWith("AIz")) {
+      keyToUse = geminiKey;
+    } else {
+      // If neither start with AIz, try whatever is available to fall back to default ADC
+      keyToUse = viteKey || geminiKey;
+      if (keyToUse === "AI Studio Free Tier") keyToUse = undefined;
     }
-    aiInstance = new GoogleGenAI({ apiKey: key || 'MISSING_KEY' });
+
+    if (!keyToUse) {
+      console.warn("Valid GEMINI_API_KEY is missing on server. Will attempt default environment auth.");
+    } else {
+      console.log(`Using API Key starting with: ${keyToUse.substring(0, 4)}`);
+    }
+    aiInstance = keyToUse ? new GoogleGenAI({ apiKey: keyToUse }) : new GoogleGenAI({});
   }
   return aiInstance;
 }
@@ -60,7 +79,8 @@ app.post('/api/ai/simulate', async (req, res) => {
   `;
 
   try {
-    const response = await getAI().models.generateContent({
+    const aiInstance = getAI();
+    const response = await aiInstance.models.generateContent({
       model: "gemini-3-flash-preview",
       contents: prompt,
       config: {
@@ -79,11 +99,15 @@ app.post('/api/ai/simulate', async (req, res) => {
       efficiencyScore: data.efficiencyScore || 0,
       nexusHint: data.nexusHint || "No technical observation available."
     });
-  } catch (error) {
-    console.error("Execution Simulation Error:", error);
+  } catch (error: any) {
+    if (error?.message?.includes("API key not valid")) {
+      console.warn("Execution Simulation Error: Invalid Gemini API key. Please check your Secrets configuration.");
+    } else {
+      console.error("Execution Simulation Error:", error);
+    }
     res.json({
       stdout: "",
-      stderr: "Nexus engine timed out or encountered an internal error.",
+      stderr: "Error: " + error.message,
       runtime: "0ms",
       memory: "0KB",
       efficiencyScore: 0,
@@ -137,9 +161,13 @@ app.post('/api/ai/recovery', async (req, res) => {
       contents: prompt,
     });
     res.json({ text: response.text || "Unable to generate insights at this moment. Keep pushing!" });
-  } catch (error) {
-    console.error("Gemini Error:", error);
-    res.json({ text: "The AI Coach is taking a break. Focus on your backlog of " + stats.backlog + " problems." });
+  } catch (error: any) {
+    if (error?.message?.includes("API key not valid")) {
+      console.warn("Gemini Error: Invalid Gemini API key. Please check your Secrets configuration.");
+    } else {
+      console.error("Gemini Error:", error);
+    }
+    res.json({ text: "The AI Coach is taking a break. Focus on your backlog of " + stats.backlog + " problems. (Check API Key)" });
   }
 });
 
